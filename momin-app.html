@@ -711,7 +711,7 @@ Object.assign(momTranslations,{
  'Zara Ahmed':'زارا احمد','Hamza Iqbal':'حمزہ اقبال','You (Responder)':'آپ — مددگار','6 minutes':'۶ منٹ','8 minutes':'۸ منٹ','10 minutes':'۱۰ منٹ','12 minutes':'۱۲ منٹ'
 });
 const momLayoutBase=momApplyTheme;
-momApplyTheme=function(){momLayoutBase();for(const[id,pair]of Object.entries(momExtraTabs)){const n=document.getElementById(id),text=momUI(...pair);if(n.textContent!==text)n.textContent=text;}const review=document.getElementById('review'),label=momUI('میری رپورٹ','My report');if(review.textContent!==label)review.textContent=label;
+momApplyTheme=function(){momLayoutBase();for(const[id,pair]of Object.entries(momExtraTabs)){const n=document.getElementById(id),text=momUI(...pair);if(n.textContent!==text)n.textContent=text;}const review=document.getElementById('review'),label=momUI('میری رپورٹس','My reports');if(review.textContent!==label)review.textContent=label;
  for(const n of screen.querySelectorAll('input[type=tel],input[readonly],a[href^="tel:"]')){n.dir='ltr';n.classList.add('latin');}
  const settingsTitle=document.querySelector('#mominSettings h2');settingsTitle.textContent=momUI('زبان اور آواز','Language & voice');
  const footer=document.querySelector('.momin-footer p'),footerText=momUI('یہ رہنمائی کا نمونہ ہے؛ مومن امدادی ٹیم روانہ نہیں کرتا۔','This is a guidance prototype; Momin does not dispatch responders.');if(footer.textContent!==footerText)footer.textContent=footerText;
@@ -728,6 +728,247 @@ momApplyTheme=function(){momPolishBase();
  const note=document.querySelector('.simple-note');if(note){const t=momUI('بات کرتے ہوئے سوچنے کے لیے وقت لے سکتے ہیں۔','You can take your time while speaking.');if(note.textContent!==t)note.textContent=t;}
  const back=document.getElementById('backNav');if(back&&['مدد کے لیے آنے والے افراد','غلط رپورٹ سے متعلق شکایات','Responders coming to help','False-report complaints'].includes(screen.querySelector('h2')?.textContent)){const t=momUI('شروع پر واپس','Back to start');if(back.textContent!==t)back.textContent=t;}
 };
+// ===== Multi-report tracking, per-report reset, resilient assessment, real nearby places =====
+const MOM_STORE='momin.reports.v1';
+let momReports=[],momCurrentId=null,momReportsOpen=false,momNearToken=0;
+try{momReports=JSON.parse(localStorage.getItem(MOM_STORE)||'[]').filter(r=>r&&r.id);}catch(e){momReports=[];}
+function momSave(){try{localStorage.setItem(MOM_STORE,JSON.stringify(momReports));}catch(e){}}
+const MOM_STATUS={
+ prepared:['رپورٹ تیار ہے','Report prepared'],
+ located:['رابطہ اور مقام شامل','Contact and location added'],
+ alerted:['قریبی مددگاروں کو اطلاع — نمونہ','Nearby helpers notified (simulated)'],
+ enroute:['مددگار راستے میں — نمونہ','Helpers on the way (simulated)'],
+ resolved:['حل ہو گیا','Resolved'],
+ cancelled:['منسوخ','Cancelled']};
+const MOM_ORDER=['prepared','located','alerted','enroute'];
+function momActive(r){return r.status!=='resolved'&&r.status!=='cancelled';}
+function momCur(){return momReports.find(r=>r.id===momCurrentId)||null;}
+function momAdvance(r,s){if(r&&momActive(r)&&MOM_ORDER.indexOf(s)>MOM_ORDER.indexOf(r.status)){r.status=s;r.updated=Date.now();momSave();}}
+function momChipClass(s){return s==='resolved'||s==='cancelled'?'rchip done':(s==='alerted'||s==='enroute'?'rchip':'rchip warn');}
+function momStatusLabel(s){const p=MOM_STATUS[s]||MOM_STATUS.prepared;return momUI(p[0],p[1]);}
+function momChip(r){return '<span class="'+momChipClass(r.status)+'" data-rstatus="'+esc(r.id)+'">'+esc(momStatusLabel(r.status))+'</span>';}
+function momSyncReport(){
+ const r=momCur();if(!r)return;
+ r.category=category;r.description=description;r.phone=phone;r.lat=lat;r.lon=lon;r.role=reporterRole;r.answers=nijaatAnswers.slice();r.media=captureUrls.length;
+ if(phone&&lat)momAdvance(r,'located');
+ momSave();
+}
+function momResetDraft(){momCurrentId=null;phone='';lat='';lon='';description='';nijaatAnswers=[];nijaatScenario=null;reporterRole=null;nijaatRole=null;captureUrls=[];nijaatAudioUrl='';category='Medical';}
+function momLoadReport(r){momCurrentId=r.id;category=r.category||'Other';description=r.description||'';phone=r.phone||'';lat=r.lat||'';lon=r.lon||'';reporterRole=r.role||null;nijaatAnswers=(r.answers||[]).slice();nijaatScenario=categoryToNijaatKey(category);}
+function momMapLink(r){return r&&r.lat?'https://www.google.com/maps?q='+encodeURIComponent(r.lat)+','+encodeURIComponent(r.lon):'';}
+
+// --- each conversation = its own report; nothing carries over from the previous one ---
+const momShowSyncBase=show;
+show=function(html){momSyncReport();momReportsOpen=false;return momShowSyncBase(html);};
+const momFinishBase=momFinishConversation;
+momFinishConversation=function(data){
+ if(!momCur()){const r={id:'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,5),created:Date.now(),updated:Date.now(),status:'prepared',service:'',category:'Other',description:'',phone:'',lat:'',lon:''};momReports.unshift(r);momCurrentId=r.id;momSave();}
+ momFinishBase(data);
+};
+const momPickerBase=picker;
+picker=function(){momSyncReport();momResetDraft();momPickerBase();};
+const momDrawBase=momDrawConversation;
+momDrawConversation=function(kind){momDrawBase(kind);if(kind==='report')momRenderBanner();};
+function momRenderBanner(){
+ const old=document.getElementById('momBanner');if(old)old.remove();
+ const hero=document.querySelector('.hero-agent');if(!hero||!momReports.length)return;
+ const act=momReports.filter(momActive);
+ const sec=document.createElement('section');sec.id='momBanner';sec.className='protected';sec.dataset.lang=momPreferredLang;
+ let html;
+ if(act.length){
+  html='<h3>'+momUI(act.length+' رپورٹ جاری ہے','You have '+act.length+' report'+(act.length>1?'s':'')+' in progress')+'</h3>'+act.slice(0,3).map(r=>'<p>'+esc(momUI(momCategoryUr[r.category]||'دیگر',r.category||'Other'))+' · '+momChip(r)+'</p>').join('');
+ }else{
+  const r=momReports[0];
+  html='<h3>'+momUI('آپ کی پچھلی رپورٹ','Your last report')+'</h3><p>'+esc(momUI(momCategoryUr[r.category]||'دیگر',r.category||'Other'))+' · '+momChip(r)+'</p>';
+ }
+ html+='<button id="momBannerView" class="full">'+momUI('میری رپورٹس دیکھیں','View my reports')+'</button>';
+ sec.innerHTML=html;hero.parentNode.insertBefore(sec,hero);
+ document.getElementById('momBannerView').onclick=()=>nijaatSummary();
+}
+// Live status refresh: updates every status chip on screen once a second.
+setInterval(()=>{
+ for(const n of document.querySelectorAll('[data-rstatus]')){const r=momReports.find(q=>q.id===n.dataset.rstatus);if(!r)continue;const t=momStatusLabel(r.status),c=momChipClass(r.status);if(n.textContent!==t)n.textContent=t;if(n.className!==c)n.className=c;}
+ const b=document.getElementById('momBanner');if(b&&b.dataset.lang!==momPreferredLang)momRenderBanner();
+},1000);
+
+// --- status moves forward as the report really moves through the flow ---
+const momCommBase=nijaatCommunity;
+nijaatCommunity=function(){
+ const r=momCur();momAdvance(r,'alerted');const id=r&&r.id;
+ setTimeout(()=>momAdvance(momReports.find(q=>q.id===id),'enroute'),3500);
+ momCommBase();
+};
+
+// --- My reports: one card per incident, with its own live status ---
+function momReportText(r){
+ const rows=[[momUI('رپورٹ کی نوعیت','Report category'),momUI(momCategoryUr[r.category]||'دیگر',r.category||'Other')],[momUI('حالت','Status'),momStatusLabel(r.status)],[momUI('آپ کی بتائی ہوئی صورتحال','What you reported'),r.description||'—'],[momUI('رابطہ نمبر','Callback number'),r.phone||'—'],[momUI('مزید بتائی گئی تفصیل','Follow-up details'),(r.answers||[]).join(' • ')||'—'],[momUI('قریبی مدد','Nearby help'),r.service||'—']];
+ return rows.map(([k,v])=>k+'\n'+v).join('\n\n')+'\n\n'+momUI('مقام','Location')+'\n'+(momMapLink(r)||'—');
+}
+function momReportCard(r){
+ const f=(label,value,extra)=>'<div class="report-field"><h3>'+esc(label)+'</h3><p dir="auto">'+(extra||esc(value))+'</p></div>';
+ return '<section class="asset report-details" data-card="'+esc(r.id)+'">'
+  +f(momUI('رپورٹ کی نوعیت','Report category'),'',esc(momUI(momCategoryUr[r.category]||'دیگر',r.category||'Other'))+' · '+momChip(r))
+  +f(momUI('وقت','Started'),new Date(r.created).toLocaleString(momPreferredLang==='ur'?'ur-PK':'en-GB'))
+  +f(momUI('آپ کی بتائی ہوئی صورتحال','What you reported'),r.description||'—')
+  +f(momUI('رابطہ نمبر','Callback number'),r.phone||'—')
+  +f(momUI('مزید بتائی گئی تفصیل','Follow-up details'),(r.answers||[]).join(' • ')||'—')
+  +f(momUI('قریبی مدد','Nearby help'),r.service||'—')
+  +'<button class="full" data-act="download" data-id="'+esc(r.id)+'">'+momUI('رپورٹ محفوظ کریں','Download report')+'</button>'
+  +(momActive(r)?'<button class="full primary" data-act="resolve" data-id="'+esc(r.id)+'">'+momUI('مسئلہ حل ہو گیا','Mark as resolved')+'</button><button class="full" data-act="cancel" data-id="'+esc(r.id)+'">'+momUI('رپورٹ منسوخ کریں','Cancel this report')+'</button>':'')
+  +'</section>';
+}
+nijaatSummary=function(){
+ if(!momReports.length){
+  show('<h2>'+momUI('میری رپورٹس','My reports')+'</h2><p>'+momUI('ابھی کوئی رپورٹ نہیں۔ مومن سے بات کر کے شروع کریں۔','No reports yet. Start by talking to Momin.')+'</p><button id="restart" class="full primary">'+momUI('بات شروع کریں','Start talking')+'</button>');
+  button('restart',picker);return;
+ }
+ const hasDone=momReports.some(r=>!momActive(r));
+ show('<h2>'+momUI('میری رپورٹس','My reports')+'</h2><p class="preview">'+momUI('ہر واقعے کی الگ رپورٹ ہے اور اس کی حالت خود بخود اپڈیٹ ہوتی ہے۔ مددگاروں کی اطلاع اور آمد صرف نمونہ ہے۔','Every incident has its own report, and its status updates live. Helper alerts and arrivals are simulated.')+'</p>'+momReports.map(momReportCard).join('')+(hasDone?'<button id="clearDone" class="full">'+momUI('مکمل رپورٹس ہٹائیں','Clear finished reports')+'</button>':'')+'<button id="restart" class="full primary">'+momUI('نئے واقعے کی رپورٹ','Report another incident')+'</button>');
+ momReportsOpen=true;
+ button('restart',picker);
+ const cd=document.getElementById('clearDone');if(cd)cd.onclick=()=>{momReports=momReports.filter(momActive);momSave();nijaatSummary();};
+ for(const b of screen.querySelectorAll('[data-act]')){
+  b.onclick=()=>{
+   const r=momReports.find(q=>q.id===b.dataset.id);if(!r)return;
+   if(b.dataset.act==='download')saveBlob(new Blob([momReportText(r)],{type:'text/plain;charset=utf-8'}),'momin-report-'+r.id+'.txt');
+   else{r.status=b.dataset.act==='resolve'?'resolved':'cancelled';r.updated=Date.now();momSave();nijaatSummary();}
+  };
+ }
+};
+reviewHome=function(){nijaatSummary();};
+
+// --- Responder / tracker tabs show the latest report when no draft is open ---
+for(const name of ['incoming','reviewTracker']){
+ const base=window[name];
+ window[name]=function(...a){if(!momCurrentId&&!description&&momReports.length)momLoadReport(momReports.find(momActive)||momReports[0]);return base.apply(this,a);};
+}
+
+// --- Notify / Get help: never fall back to asking for a category just because the network hiccuped ---
+function momLocalAssess(history){
+ const text=history.filter(m=>m.role==='user').map(m=>m.content).join(' ');const t=text.toLowerCase();const has=re=>re.test(t);
+ let cat='Other';
+ if(has(/fire|burn|smoke|blaze|flame/)||/آگ|جل |جلنے|دھواں|شعل/.test(t))cat='Fire';
+ else if(has(/flood|earthquake|landslide|storm|collapse|cyclone/)||/سیلاب|زلزل|طوفان|لینڈ سلائیڈ|گر گئی|منہدم/.test(t))cat='Disaster';
+ else if(has(/accident|crash|collision|hit by|run over|car|bike|motorcycle|truck|bus|vehicle/)||/ایکسیڈنٹ|حادثہ|گاڑی|ٹکر|موٹر سائیکل|بس /.test(t))cat='Road accident';
+ else if((has(/child|kid|boy|girl|baby|minor/)&&has(/abus|beat|molest|kidnap|abduct|cry|missing|torture/))||(/بچ(ہ|ی|ے|وں)/.test(t)&&/مار|تشدد|اغوا|رو رہ|گم/.test(t)))cat='Child abuse';
+ else if(has(/harass|stalk|follow|threat|molest|assault|blackmail|eve.?teas/)||/ہراس|تعاقب|پیچھا|دھمکی|چھیڑ|بلیک میل/.test(t))cat='Harassment';
+ else if(has(/bleed|blood|heart|chest|pain|faint|unconscious|breath|seizure|injur|hurt|sick|poison|shock|fever|pregnan/)||/خون|درد|دل|بے ہوش|سانس|زخمی|بیمار|زہر|بخار|کرنٹ/.test(t))cat='Medical';
+ const selfN=(t.match(/\b(i|i'm|im|me|my|myself)\b|میں|مجھے|میرا|میری|میرے/g)||[]).length;
+ const witN=(t.match(/\b(someone|somebody|he|she|they|his|her|man|woman|stranger|boy|girl|child|neighbou?r)\b|کوئی|وہ|آدمی|عورت|شخص/g)||[]).length;
+ const saw=has(/\b(saw|see|seeing|witness|watching)\b/)||/دیکھ/.test(t);
+ const role=(witN>selfN||(witN>0&&saw))?'witness':'self';
+ return {type:'complete',category:cat,confidence:35,role,summary:text.trim().slice(0,500),language:/[؀-ۿ]/.test(text)?'Urdu':'English'};
+}
+momRequestHelp=async function(){
+ const pending=[momDraft,document.getElementById('momText')?.value.trim()].filter(Boolean).join(' ');
+ if(pending)momConversation.push({role:'user',content:pending});
+ const history=momConversation.map(m=>({...m}));momCleanup();
+ show('<h2>'+momUI('مدد کے اگلے مراحل','Next steps for help')+'</h2><p id="momPrep" role="status">'+momUI('آپ کی بات سے رپورٹ تیار کر رہا ہوں…','Preparing a report from what you have shared…')+'</p><button id="helpManual" class="full">'+momUI('خود ہنگامی نوعیت منتخب کریں','Choose the emergency type myself')+'</button>');
+ button('helpManual',()=>momManualHelp(history));
+ const epoch=momEpoch;
+ if(!history.some(m=>m.role==='user')){momManualHelp(history);return;}
+ const slow=setTimeout(()=>{const n=document.getElementById('momPrep');if(n&&epoch===momEpoch)n.textContent=momUI('سرور جاگ رہا ہے، چند لمحے…','The server is waking up, just a moment…');},6000);
+ let data=null;
+ for(let i=0;i<2&&!data;i++){
+  const abort=new AbortController();momFetchAbort=abort;const timer=setTimeout(()=>abort.abort(),20000);
+  try{const r=await fetch('/api/prepare-report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({history}),signal:abort.signal});const j=await r.json();if(r.ok&&j&&j.category)data=j;}catch(e){}
+  clearTimeout(timer);
+  if(epoch!==momEpoch){clearTimeout(slow);return;}
+  if(!data&&i===0)await new Promise(res=>setTimeout(res,1500));
+ }
+ clearTimeout(slow);
+ if(epoch!==momEpoch)return;
+ momFinishConversation(data||momLocalAssess(history));
+};
+// If the type was a low-confidence guess, let the person correct it (never forced).
+const momGuidanceBase=nijaatGuidance;
+nijaatGuidance=function(){
+ momGuidanceBase();
+ if(nijaatRealConfidence!==null&&nijaatRealConfidence<60){
+  screen.insertAdjacentHTML('beforeend','<p class="preview">'+momUI('مومن نے اندازہ لگایا ہے۔ اگر نوعیت غلط ہے تو بدل لیں۔','Momin made its best guess at the emergency type. Change it if it is wrong.')+'</p><button id="momChangeType" class="full">'+momUI('ہنگامی نوعیت بدلیں','Change emergency type')+'</button>');
+  document.getElementById('momChangeType').onclick=()=>{
+   show('<h2>'+momUI('درست نوعیت منتخب کریں','Choose the right type')+'</h2><div id="helpCategories"></div>');
+   for(const cat of ['Fire','Medical','Road accident','Disaster','Child abuse','Harassment','Other']){const b=document.createElement('button');b.className='full';b.textContent=momUI(momCategoryUr[cat],cat);b.onclick=()=>momFinishConversation({category:cat,summary:description,confidence:100,role:reporterRole||'self'});document.getElementById('helpCategories').append(b);}
+  };
+ }
+};
+
+// --- Real nearby places from the shared location (OpenStreetMap via Overpass) ---
+const MOM_PLACE_GROUPS={
+ hospital:['ہسپتال اور ایمرجنسی','Hospitals and emergency departments','hospital'],
+ clinic:['کلینک اور ڈاکٹر','Clinics and doctors','clinic'],
+ pharmacy:['میڈیکل سٹور / فارمیسی','Pharmacies','pharmacy'],
+ fire_station:['فائر سٹیشن','Fire stations','fire station'],
+ police:['پولیس سٹیشن','Police stations','police station']};
+const MOM_WANTED={'Fire':['fire_station','hospital','clinic'],'Medical':['hospital','clinic','pharmacy'],'Road accident':['hospital','clinic','pharmacy','police'],'Disaster':['hospital','fire_station','police','clinic'],'Child abuse':['police','hospital','clinic'],'Harassment':['police','hospital','clinic'],'Other':['hospital','clinic','pharmacy','police']};
+function momKm(a,b,c,d){const R=6371,t=x=>x*Math.PI/180,dl=t(c-a),dn=t(d-b),h=Math.sin(dl/2)**2+Math.cos(t(a))*Math.cos(t(c))*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(h));}
+async function momFetchNearby(la,lo){
+ const key='momNear:'+la.toFixed(3)+','+lo.toFixed(3);
+ try{const c=sessionStorage.getItem(key);if(c)return JSON.parse(c);}catch(e){}
+ const eps=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
+ let best=null;
+ for(const radius of [5000,15000]){
+  const q='[out:json][timeout:20];nwr(around:'+radius+','+la+','+lo+')[amenity~"^(hospital|clinic|doctors|pharmacy|fire_station|police)$"];out center tags 150;';
+  let json=null;
+  for(const ep of eps){
+   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),15000);
+   try{const r=await fetch(ep,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(q),signal:abort.signal});if(r.ok)json=await r.json();}catch(e){}
+   clearTimeout(timer);if(json)break;
+  }
+  if(!json)continue;
+  const seen=new Set(),items=[];
+  for(const e of json.elements||[]){
+   const tg=e.tags||{},c=e.center||{lat:e.lat,lon:e.lon};if(c.lat==null)continue;
+   const type=tg.amenity==='doctors'?'clinic':tg.amenity;if(!MOM_PLACE_GROUPS[type])continue;
+   const name=tg.name||tg['name:en']||tg['name:ur']||'';if(!name&&type!=='pharmacy')continue;
+   const dedupe=type+'|'+name.toLowerCase()+'|'+c.lat.toFixed(3);if(seen.has(dedupe))continue;seen.add(dedupe);
+   items.push({type,name,km:momKm(la,lo,c.lat,c.lon),lat:c.lat,lon:c.lon,phone:tg.phone||tg['contact:phone']||'',hours:tg.opening_hours||'',emergency:tg.emergency==='yes'||type==='hospital'&&tg.emergency!=='no',departments:(tg['healthcare:speciality']||'').split(';').map(s=>s.trim().replace(/_/g,' ')).filter(Boolean)});
+  }
+  items.sort((a,b)=>a.km-b.km);
+  best={radius:radius/1000,items};
+  if(items.filter(i=>i.type==='hospital'||i.type==='clinic').length>=3)break;
+ }
+ if(best){try{sessionStorage.setItem(key,JSON.stringify(best));}catch(e){}}
+ return best;
+}
+function momPlaceHtml(p){
+ const tel=String(p.phone).split(/[;,]/)[0].replace(/[^+0-9]/g,'');
+ const parts=[p.km.toFixed(1)+' '+momUI('کلومیٹر','km')];
+ if(p.type==='hospital'&&p.emergency)parts.push(momUI('ایمرجنسی شعبہ ممکن','Emergency department likely'));
+ if(p.hours==='24/7')parts.push(momUI('۲۴ گھنٹے','Open 24/7'));else if(p.hours)parts.push(momUI('اوقات: ','Hours: ')+p.hours);
+ return '<div class="report-field"><h3>'+esc(p.name||momUI('بے نام فارمیسی','Pharmacy (no name listed)'))+'</h3><p dir="auto">'+esc(parts.join(' · '))+'</p>'
+  +(p.departments.length?'<p dir="auto">'+esc(momUI('شعبے: ','Departments: ')+p.departments.join(', '))+'</p>':'')
+  +'<p>'+(tel?'<a class="latin" href="tel:'+tel+'">'+momUI('کال کریں','Call')+' '+esc(tel)+'</a> · ':'')+'<a href="https://www.google.com/maps/dir/?api=1&destination='+p.lat+','+p.lon+'" target="_blank" rel="noopener">'+momUI('راستہ دیکھیں','Directions')+'</a></p></div>';
+}
+nijaatMaps=function(){
+ const cat=category,la=parseFloat(lat),lo=parseFloat(lon),token=++momNearToken,r=momCur();
+ const mapSearch=(term,label)=>'<a href="https://www.google.com/maps/search/'+encodeURIComponent(term)+'/@'+la+','+lo+',14z" target="_blank" rel="noopener">'+label+'</a>';
+ show('<h2>'+momUI('قریبی مدد','Nearby help')+'</h2>'
+  +'<section class="service-card"><h3>'+momUI('ہنگامی نمبر','Emergency numbers')+'</h3><p><a class="latin" href="tel:1122">'+momUI('ریسکیو ۱۱۲۲ — ایمبولینس، آگ، ریسکیو','Rescue 1122 — ambulance, fire, rescue')+'</a></p><p><a class="latin" href="tel:15">'+momUI('پولیس ۱۵','Police 15')+'</a> · <a class="latin" href="tel:115">'+momUI('ایدھی ایمبولینس ۱۱۵','Edhi ambulance 115')+'</a></p></section>'
+  +'<p id="momNearStatus" role="status" class="preview">'+momUI('آپ کے مقام کے قریب جگہیں تلاش کر رہا ہوں…','Finding places near your location…')+'</p><div id="momNearList"></div>'
+  +'<section class="service-card"><h3>'+momUI('نقشے پر تلاش کریں','Search on the map')+'</h3><p>'+mapSearch('hospital',momUI('ہسپتال','Hospitals'))+' · '+mapSearch('pharmacy',momUI('فارمیسی','Pharmacies'))+' · '+mapSearch('clinic',momUI('کلینک','Clinics'))+' · '+mapSearch('emergency room',momUI('ایمرجنسی','Emergency rooms'))+'</p></section>'
+  +'<button id="next" class="full primary">'+momUI('قریبی لوگوں کو اطلاع دیں','Notify nearby people')+'</button><button id="skip" class="full">'+momUI('خلاصے کی طرف جائیں','Continue to summary')+'</button>');
+ button('next',nijaatCommunity);button('skip',nijaatSMS);
+ if(!isFinite(la)||!isFinite(lo)){document.getElementById('momNearStatus').textContent=momUI('مقام نہیں ملا۔','No location was shared.');return;}
+ momFetchNearby(la,lo).then(res=>{
+  if(token!==momNearToken)return;const status=document.getElementById('momNearStatus'),list=document.getElementById('momNearList');if(!status||!list)return;
+  if(!res){status.textContent=momUI('قریبی جگہوں کا ڈیٹا ابھی نہیں مل سکا۔ اوپر کے ہنگامی نمبر یا نقشے کے لنک استعمال کریں۔','Could not load nearby places right now (offline, or the map data service is busy). Use the emergency numbers above or the map links below.');return;}
+  const wanted=MOM_WANTED[cat]||MOM_WANTED.Other;let html='',nearest=null;
+  for(const type of wanted){
+   const g=MOM_PLACE_GROUPS[type],items=res.items.filter(i=>i.type===type).slice(0,4);
+   if(items[0]&&(type==='hospital'||!nearest)&&(!nearest||type==='hospital'))nearest=items[0];
+   html+='<section class="service-card"><h3>'+momUI(g[0],g[1])+'</h3>'+(items.length?items.map(momPlaceHtml).join(''):'<p class="preview">'+momUI('اوپن اسٹریٹ میپ میں '+res.radius+' کلومیٹر کے اندر کوئی نہیں ملا۔ نقشے کا لنک آزمائیں۔','None found within '+res.radius+' km in OpenStreetMap. Try the map links below.')+'</p>')+'</section>';
+  }
+  list.innerHTML=html;
+  status.textContent=momUI('یہ ڈیٹا اوپن اسٹریٹ میپ کے رضاکاروں کا ہے، کوئی جگہ غائب یا پرانی ہو سکتی ہے۔ فاصلہ سیدھی لکیر میں ہے۔ فوری ہو تو ۱۱۲۲ پر کال کریں۔','Data comes from OpenStreetMap volunteers, so a place may be missing or out of date. Distances are straight-line. If it is urgent, call 1122.');
+  const rr=momCur();if(rr&&nearest){rr.service=nearest.name+' ('+nearest.km.toFixed(1)+' km)';momSave();}
+  momApplyTheme();
+ });
+};
+// Wake a sleeping free-tier server early, so the first real request is not the slow one.
+try{fetch('/health').catch(()=>{});document.addEventListener('visibilitychange',()=>{if(!document.hidden)fetch('/health').catch(()=>{});});}catch(e){}
+(function(){const s=document.createElement('style');s.textContent='.rchip{display:inline-block;padding:0 12px;border-radius:999px;font-size:14px;line-height:1.9;background:var(--mint,#edf2e9);color:var(--green,#115f51);font-weight:600}.rchip.warn{background:#fdecc8;color:#7a5200}.rchip.done{background:#e9e9e4;color:#697a71}';document.head.append(s);})();
+
 // Re-render labels when language changes, retaining form fields and keeping chat state untouched.
 let momCurrentPage=null;
 for(const name of ['incoming','nijaatPhone','nijaatMaps','nijaatCommunity','nijaatSMS','nijaatSummary','commit','support','responderReview','reviewTracker','momComplaintList','reportSuspected']){const original=window[name];window[name]=function(...args){momCurrentPage={name,args};return original(...args);};}
